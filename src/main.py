@@ -19,13 +19,13 @@ logging.basicConfig(
 logger = logging.getLogger('main')
 
 
-def create_client(testnet=True):
-    return Client(config.API_KEY, config.API_SECRET, testnet=testnet)
+def create_client():
+    return Client(config.API_KEY, config.API_SECRET, testnet=False)
 
 
 async def on_new_listing(symbol: str):
     logger.info('New futures listing: %s', symbol)
-    client = create_client(testnet=config.is_testnet)
+    client = create_client()
 
     ex = FuturesExecutor(client)
     try:
@@ -42,13 +42,21 @@ async def on_new_listing(symbol: str):
     qty = res['qty']
     entry = res['entry_price']
 
-    # Place trailing stop immediately with server-side activation at +10%
+    # Place trailing stop immediately with server-side activation using env percentages
     try:
-        activation = entry * 1.10
-        ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0, activation_price=activation)
-        logger.info('Placed server-side trailing stop for %s with activation %.8f', symbol, activation)
+        activation = entry * (1.0 + config.TRAILING_ACTIVATION_PCT)
+        ex.place_native_trailing_stop(symbol, qty, callback_rate=config.TRAILING_CALLBACK_PCT, activation_price=activation)
+        logger.info('Placed server-side trailing stop for %s with activation %.8f (callback %.3f%%)', symbol, activation, config.TRAILING_CALLBACK_PCT)
     except Exception as e:
         logger.exception('Failed to place server-side trailing stop: %s', e)
+
+    # Place stop-loss at configured pct below entry (MARK_PRICE, closePosition)
+    try:
+        sl = entry * (1.0 - config.STOP_LOSS_PCT)
+        ex.place_stop_loss(symbol, qty, stop_price=sl)
+        logger.info('Placed stop-loss for %s at %.8f', symbol, sl)
+    except Exception as e:
+        logger.exception('Failed to place stop-loss: %s', e)
 
     async def monitor_until_close():
         try:
@@ -95,13 +103,21 @@ async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
     qty = res['qty']
     entry = res['entry_price']
 
-    # Place trailing stop immediately with server-side activation at +10%
+    # Place trailing stop immediately with server-side activation using env percentages
     try:
-        activation = entry * 1.10
-        ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0, activation_price=activation)
-        logger.info('Placed server-side trailing stop for %s with activation %.8f', symbol, activation)
+        activation = entry * (1.0 + config.TRAILING_ACTIVATION_PCT)
+        ex.place_native_trailing_stop(symbol, qty, callback_rate=config.TRAILING_CALLBACK_PCT, activation_price=activation)
+        logger.info('Placed server-side trailing stop for %s with activation %.8f (callback %.3f%%)', symbol, activation, config.TRAILING_CALLBACK_PCT)
     except Exception as e:
         logger.exception('Failed to place server-side trailing stop: %s', e)
+
+    # Place stop-loss at configured pct below entry (MARK_PRICE, closePosition)
+    try:
+        sl = entry * (1.0 - config.STOP_LOSS_PCT)
+        ex.place_stop_loss(symbol, qty, stop_price=sl)
+        logger.info('Placed stop-loss for %s at %.8f', symbol, sl)
+    except Exception as e:
+        logger.exception('Failed to place stop-loss: %s', e)
 
     async def monitor_until_close():
         try:
@@ -171,7 +187,7 @@ async def manual_flow(symbol: str, at_utc: str | None):
     if not sym.endswith('USDT'):
         sym = sym + 'USDT'
 
-    client = create_client(testnet=config.is_testnet)
+    client = create_client()
     ex = FuturesExecutor(client)
     # Pre-set leverage ahead of time to avoid delay at the exact second (fixed 10x)
     try:
@@ -192,24 +208,29 @@ async def manual_flow(symbol: str, at_utc: str | None):
     delay = (dt - now).total_seconds() if dt else 0
     if delay > 0:
         logger.info('Manual mode: waiting until %s UTC (%.1fs) for %s', dt.isoformat(), delay, sym)
-        await asyncio.sleep(delay)
+        while True:
+            now = datetime.now(tz=timezone.utc)
+            remaining = int((dt - now).total_seconds())
+            if remaining <= 0:
+                break
+            hrs = remaining // 3600
+            mins = (remaining % 3600) // 60
+            secs = remaining % 60
+            logger.info('T-minus %02d:%02d:%02d for %s', hrs, mins, secs, sym)
+            await asyncio.sleep(1.0)
 
     await execute_immediate_trade(client, sym, chosen_lev)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['testnet', 'live'], default='testnet')
     parser.add_argument('--symbol', help='Manual symbol to trade (e.g., BTCUSDT or BTC)')
     parser.add_argument('--at-utc', help='UTC datetime to execute, e.g., "2025-10-11 08:00" or ISO 8601')
     args = parser.parse_args()
     if args.symbol and not args.at_utc:
         parser.error('--at-utc is required when --symbol is provided')
-    config.MODE = args.mode
     logger.info(
-        'Starting bot. mode=%s testnet=%s poll_interval=%ss log_level=%s',
-        config.MODE,
-        'true' if config.is_testnet else 'false',
+        'Starting bot (live). poll_interval=%ss log_level=%s',
         config.POLL_INTERVAL,
         config.LOG_LEVEL,
     )

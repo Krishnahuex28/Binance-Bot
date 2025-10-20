@@ -187,3 +187,53 @@ class FuturesExecutor:
             return None
 
 
+    def place_stop_loss(self, symbol: str, qty: float, stop_price: float):
+        """Place a STOP_MARKET order to close the long if price drops to stop_price."""
+        try:
+            # Round stop price to tick size
+            tick_size = None
+            try:
+                info = self.client.futures_exchange_info()
+                sym_info = next((s for s in info.get('symbols', []) if s.get('symbol') == symbol), None)
+                if sym_info:
+                    pf = next((f for f in sym_info.get('filters', []) if f.get('filterType') == 'PRICE_FILTER'), None)
+                    if pf:
+                        tick_size = pf.get('tickSize')
+            except Exception:
+                tick_size = None
+
+            def floor_to_tick(value: float, tick: str | None) -> float:
+                if not tick:
+                    return value
+                dv = Decimal(str(value))
+                dt = Decimal(tick)
+                if dt == 0:
+                    return value
+                return float((dv // dt) * dt)
+
+            sp = floor_to_tick(stop_price, tick_size)
+
+            hedge = self.is_hedge_mode()
+            params = {
+                'symbol': symbol,
+                'side': 'SELL',
+                'type': 'STOP_MARKET',
+                'stopPrice': str(sp),
+                'closePosition': 'true',
+                'workingType': 'MARK_PRICE',
+            }
+            # When using closePosition=true, quantity is not needed; include positionSide for hedge mode
+            if hedge:
+                params['positionSide'] = 'LONG'
+
+            resp = self.client.futures_create_order(**params)
+            logger.info('Placed stop-loss: %s', resp)
+            return resp
+        except BinanceAPIException as e:
+            logger.warning('Stop-loss failed: %s', e)
+            return None
+        except Exception as e:
+            logger.exception('Unexpected stop-loss error: %s', e)
+            return None
+
+
