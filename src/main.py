@@ -46,15 +46,54 @@ async def on_new_listing(symbol: str):
         while True:
             try:
                 mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                try:
+                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
+                except Exception:
+                    change_pct = 0.0
+                logger.info('Price tick %s: mark=%.8f entry=%.8f (%.2f%%)', symbol, mark, entry, change_pct)
                 if mark >= entry * 1.10:
                     logger.info('Reached +10%%. Arming trailing stop for %s', symbol)
                     ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0)
                     break
             except Exception as e:
                 logger.exception('Monitor loop error: %s', e)
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(1.0)
 
-    asyncio.create_task(monitor_and_arm_trailing())
+    async def monitor_until_close():
+        try:
+            hedge = False
+            try:
+                hedge = FuturesExecutor(client).is_hedge_mode()
+            except Exception:
+                hedge = False
+            while True:
+                pos_list = client.futures_position_information(symbol=symbol)
+                remaining = 0.0
+                for p in pos_list:
+                    side = p.get('positionSide') or 'BOTH'
+                    amt = float(p.get('positionAmt') or 0.0)
+                    if hedge:
+                        if side == 'LONG':
+                            remaining = abs(amt)
+                            break
+                    else:
+                        remaining = abs(amt)
+                        break
+                mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                try:
+                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
+                except Exception:
+                    change_pct = 0.0
+                logger.info('Position %s: remaining=%.8f mark=%.8f entry=%.8f (%.2f%%)', symbol, remaining, mark, entry, change_pct)
+                if remaining <= 1e-10:
+                    logger.info('Position closed for %s. Exiting monitor.', symbol)
+                    break
+                await asyncio.sleep(1.0)
+        except Exception as e:
+            logger.exception('Monitor until close error: %s', e)
+
+    await monitor_and_arm_trailing()
+    await monitor_until_close()
 
 
 async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
@@ -70,15 +109,54 @@ async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
         while True:
             try:
                 mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                try:
+                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
+                except Exception:
+                    change_pct = 0.0
+                logger.info('Price tick %s: mark=%.8f entry=%.8f (%.2f%%)', symbol, mark, entry, change_pct)
                 if mark >= entry * 1.10:
                     logger.info('Reached +10%%. Arming trailing stop for %s', symbol)
                     ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0)
                     break
             except Exception as e:
                 logger.exception('Monitor loop error: %s', e)
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(1.0)
 
-    asyncio.create_task(monitor_and_arm_trailing())
+    async def monitor_until_close():
+        try:
+            hedge = False
+            try:
+                hedge = FuturesExecutor(client).is_hedge_mode()
+            except Exception:
+                hedge = False
+            while True:
+                pos_list = client.futures_position_information(symbol=symbol)
+                remaining = 0.0
+                for p in pos_list:
+                    side = p.get('positionSide') or 'BOTH'
+                    amt = float(p.get('positionAmt') or 0.0)
+                    if hedge:
+                        if side == 'LONG':
+                            remaining = abs(amt)
+                            break
+                    else:
+                        remaining = abs(amt)
+                        break
+                mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                try:
+                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
+                except Exception:
+                    change_pct = 0.0
+                logger.info('Position %s: remaining=%.8f mark=%.8f entry=%.8f (%.2f%%)', symbol, remaining, mark, entry, change_pct)
+                if remaining <= 1e-10:
+                    logger.info('Position closed for %s. Exiting monitor.', symbol)
+                    break
+                await asyncio.sleep(1.0)
+        except Exception as e:
+            logger.exception('Monitor until close error: %s', e)
+
+    await monitor_and_arm_trailing()
+    await monitor_until_close()
 
 
 async def main_loop():
@@ -121,6 +199,13 @@ async def manual_flow(symbol: str, at_utc: str | None):
     except Exception as e:
         logger.error('Failed to set leverage for %s: %s', sym, e)
         return
+
+    # Detect and log position mode (Hedge vs One-way)
+    try:
+        hedge = ex.is_hedge_mode()
+        logger.info('Position mode detected: %s', 'Hedge' if hedge else 'One-way')
+    except Exception:
+        logger.info('Position mode detection failed; proceeding')
 
     dt = _parse_utc_datetime(at_utc) if at_utc else None
     now = datetime.now(tz=timezone.utc)
