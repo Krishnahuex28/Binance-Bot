@@ -10,6 +10,7 @@ class Config:
     API_KEY: str = os.getenv('BINANCE_API_KEY', '')
     API_SECRET: str = os.getenv('BINANCE_API_SECRET', '')
     TRADE_USDT: float = float(os.getenv('TRADE_USDT', '1'))
+    LEVERAGE: int = int(os.getenv('LEVERAGE', '10'))
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
     POLL_INTERVAL: int = int(os.getenv('POLL_INTERVAL', '20'))
     ANNOUNCE_MAX_AGE_MINUTES: int = int(os.getenv('ANNOUNCE_MAX_AGE_MINUTES', '120'))

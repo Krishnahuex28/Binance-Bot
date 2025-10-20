@@ -5,8 +5,8 @@ import sys
 from datetime import datetime, timezone
 from binance.client import Client
 
-from config import config
-from executor import FuturesExecutor
+from src.config import config
+from src.executor import FuturesExecutor
 
 
 logging.basicConfig(
@@ -29,7 +29,7 @@ async def on_new_listing(symbol: str):
 
     ex = FuturesExecutor(client)
     try:
-        chosen_lev = ex.set_leverage(symbol, 10)
+        chosen_lev = ex.set_leverage(symbol, config.LEVERAGE)
     except Exception as e:
         logger.error('Failed to set leverage for %s: %s', symbol, e)
         return
@@ -191,7 +191,7 @@ async def manual_flow(symbol: str, at_utc: str | None):
     ex = FuturesExecutor(client)
     # Pre-set leverage ahead of time to avoid delay at the exact second (fixed 10x)
     try:
-        chosen_lev = ex.set_leverage(sym, 10)
+        chosen_lev = ex.set_leverage(sym, config.LEVERAGE)
     except Exception as e:
         logger.error('Failed to set leverage for %s: %s', sym, e)
         return
