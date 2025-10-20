@@ -4,6 +4,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
 from src.config import config
 from src.executor import FuturesExecutor
@@ -96,9 +97,36 @@ async def on_new_listing(symbol: str):
 
 async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
     ex = FuturesExecutor(client)
-    res = ex.open_futures_long(symbol, config.TRADE_USDT, leverage=leverage)
+
+    # Set leverage with quick retries in case the symbol is not yet active at the exact second
+    lev_set = False
+    for attempt in range(15):  # up to ~15s
+        try:
+            ex.set_leverage(symbol, leverage)
+            lev_set = True
+            break
+        except BinanceAPIException as e:
+            code = getattr(e, 'code', None)
+            if code == -1121:  # Invalid symbol (not active yet)
+                await asyncio.sleep(1.0)
+                continue
+            raise
+        except Exception:
+            await asyncio.sleep(1.0)
+            continue
+    if not lev_set:
+        logger.error('Could not set leverage for %s after retries', symbol)
+        return
+
+    # Open market long with retries if symbol just became active
+    res = None
+    for attempt in range(15):
+        res = ex.open_futures_long(symbol, config.TRADE_USDT, leverage=leverage)
+        if res:
+            break
+        await asyncio.sleep(1.0)
     if not res:
-        logger.error('Open long failed for %s', symbol)
+        logger.error('Open long failed for %s after retries', symbol)
         return
     qty = res['qty']
     entry = res['entry_price']
@@ -189,12 +217,6 @@ async def manual_flow(symbol: str, at_utc: str | None):
 
     client = create_client()
     ex = FuturesExecutor(client)
-    # Pre-set leverage ahead of time to avoid delay at the exact second (fixed 10x)
-    try:
-        chosen_lev = ex.set_leverage(sym, config.LEVERAGE)
-    except Exception as e:
-        logger.error('Failed to set leverage for %s: %s', sym, e)
-        return
 
     # Detect and log position mode (Hedge vs One-way)
     try:
@@ -219,7 +241,7 @@ async def manual_flow(symbol: str, at_utc: str | None):
             logger.info('T-minus %02d:%02d:%02d for %s', hrs, mins, secs, sym)
             await asyncio.sleep(1.0)
 
-    await execute_immediate_trade(client, sym, chosen_lev)
+    await execute_immediate_trade(client, sym, config.LEVERAGE)
 
 
 if __name__ == '__main__':
