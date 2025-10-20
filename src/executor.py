@@ -124,24 +124,56 @@ class FuturesExecutor:
             logger.exception('Unexpected open error: %s', e)
             return None
 
-    def place_native_trailing_stop(self, symbol: str, qty: float, callback_rate: float = 1.0):
+    def place_native_trailing_stop(self, symbol: str, qty: float, callback_rate: float = 1.0, activation_price: float | None = None):
         try:
             hedge = self.is_hedge_mode()
+
+            # Get tickSize for proper rounding of activationPrice
+            tick_size = None
+            try:
+                info = self.client.futures_exchange_info()
+                sym_info = next((s for s in info.get('symbols', []) if s.get('symbol') == symbol), None)
+                if sym_info:
+                    pf = next((f for f in sym_info.get('filters', []) if f.get('filterType') == 'PRICE_FILTER'), None)
+                    if pf:
+                        tick_size = pf.get('tickSize')
+            except Exception:
+                tick_size = None
+
+            def floor_to_tick(value: float, tick: str | None) -> float:
+                if not tick:
+                    return value
+                dv = Decimal(str(value))
+                dt = Decimal(tick)
+                if dt == 0:
+                    return value
+                return float((dv // dt) * dt)
+
             params = {
                 'symbol': symbol,
                 'side': 'SELL',
                 'type': 'TRAILING_STOP_MARKET',
                 'quantity': str(qty),
                 'callbackRate': str(callback_rate),
+                'workingType': 'MARK_PRICE',
             }
+            if activation_price is not None:
+                ap = floor_to_tick(activation_price, tick_size)
+                params['activationPrice'] = str(ap)
             if hedge:
                 params['positionSide'] = 'LONG'
             try:
-                # Some accounts/symbols reject reduceOnly for TSM; send without reduceOnly, then retry with reduceOnly=false if needed
+                # Primary attempt
                 resp = self.client.futures_create_order(**params)
             except BinanceAPIException as e:
-                if getattr(e, 'code', None) == -1106 and 'reduceonly' in str(e).lower():
+                msg = str(e).lower()
+                code = getattr(e, 'code', None)
+                if code == -1106 and 'reduceonly' in msg:
                     params['reduceOnly'] = 'false'
+                    resp = self.client.futures_create_order(**params)
+                elif code == -1102 and 'activationprice' in msg:
+                    # Retry without activation price (activate immediately)
+                    params.pop('activationPrice', None)
                     resp = self.client.futures_create_order(**params)
                 else:
                     raise

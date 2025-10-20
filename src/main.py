@@ -42,22 +42,13 @@ async def on_new_listing(symbol: str):
     qty = res['qty']
     entry = res['entry_price']
 
-    async def monitor_and_arm_trailing():
-        while True:
-            try:
-                mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-                try:
-                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
-                except Exception:
-                    change_pct = 0.0
-                logger.info('Price tick %s: mark=%.8f entry=%.8f (%.2f%%)', symbol, mark, entry, change_pct)
-                if mark >= entry * 1.10:
-                    logger.info('Reached +10%%. Arming trailing stop for %s', symbol)
-                    ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0)
-                    break
-            except Exception as e:
-                logger.exception('Monitor loop error: %s', e)
-            await asyncio.sleep(1.0)
+    # Place trailing stop immediately with server-side activation at +10%
+    try:
+        activation = entry * 1.10
+        ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0, activation_price=activation)
+        logger.info('Placed server-side trailing stop for %s with activation %.8f', symbol, activation)
+    except Exception as e:
+        logger.exception('Failed to place server-side trailing stop: %s', e)
 
     async def monitor_until_close():
         try:
@@ -92,7 +83,6 @@ async def on_new_listing(symbol: str):
         except Exception as e:
             logger.exception('Monitor until close error: %s', e)
 
-    await monitor_and_arm_trailing()
     await monitor_until_close()
 
 
@@ -105,22 +95,13 @@ async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
     qty = res['qty']
     entry = res['entry_price']
 
-    async def monitor_and_arm_trailing():
-        while True:
-            try:
-                mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-                try:
-                    change_pct = ((mark / entry) - 1.0) * 100.0 if entry else 0.0
-                except Exception:
-                    change_pct = 0.0
-                logger.info('Price tick %s: mark=%.8f entry=%.8f (%.2f%%)', symbol, mark, entry, change_pct)
-                if mark >= entry * 1.10:
-                    logger.info('Reached +10%%. Arming trailing stop for %s', symbol)
-                    ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0)
-                    break
-            except Exception as e:
-                logger.exception('Monitor loop error: %s', e)
-            await asyncio.sleep(1.0)
+    # Place trailing stop immediately with server-side activation at +10%
+    try:
+        activation = entry * 1.10
+        ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0, activation_price=activation)
+        logger.info('Placed server-side trailing stop for %s with activation %.8f', symbol, activation)
+    except Exception as e:
+        logger.exception('Failed to place server-side trailing stop: %s', e)
 
     async def monitor_until_close():
         try:
@@ -155,7 +136,6 @@ async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
         except Exception as e:
             logger.exception('Monitor until close error: %s', e)
 
-    await monitor_and_arm_trailing()
     await monitor_until_close()
 
 
