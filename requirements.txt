@@ -1,8 +1,5 @@
 python-binance==1.0.12
-aiohttp==3.9.5
 python-dotenv==1.0.0
 pytest==8.2.0
 pytest-asyncio==0.23.6
 hypothesis==6.112.1
-beautifulsoup4==4.12.3
-cloudscraper==1.2.71

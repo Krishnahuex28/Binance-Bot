@@ -2,11 +2,10 @@ import asyncio
 import logging
 import argparse
 import sys
+from datetime import datetime, timezone
 from binance.client import Client
 
 from config import config
-from announce_watcher import AnnounceWatcher
-from scanner import compute_score
 from executor import FuturesExecutor
 
 
@@ -28,15 +27,9 @@ async def on_new_listing(symbol: str):
     logger.info('New futures listing: %s', symbol)
     client = create_client(testnet=config.is_testnet)
 
-    score = compute_score(client, symbol)
-    logger.info('Pre-launch futures score for %s: %.4f', symbol, score)
-    if score <= 0.01:
-        logger.info('Score below threshold. Skipping trade for %s', symbol)
-        return
-
     ex = FuturesExecutor(client)
     try:
-        chosen_lev = ex.set_leverage_with_fallback(symbol, preferred=(50, 20, 10))
+        chosen_lev = ex.set_leverage(symbol, 10)
     except Exception as e:
         logger.error('Failed to set leverage for %s: %s', symbol, e)
         return
@@ -48,7 +41,30 @@ async def on_new_listing(symbol: str):
 
     qty = res['qty']
     entry = res['entry_price']
-    ex.place_take_profit_limits(symbol, qty, entry)
+
+    async def monitor_and_arm_trailing():
+        while True:
+            try:
+                mark = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                if mark >= entry * 1.10:
+                    logger.info('Reached +10%%. Arming trailing stop for %s', symbol)
+                    ex.place_native_trailing_stop(symbol, qty, callback_rate=1.0)
+                    break
+            except Exception as e:
+                logger.exception('Monitor loop error: %s', e)
+            await asyncio.sleep(0.8)
+
+    asyncio.create_task(monitor_and_arm_trailing())
+
+
+async def execute_immediate_trade(client: Client, symbol: str, leverage: int):
+    ex = FuturesExecutor(client)
+    res = ex.open_futures_long(symbol, config.TRADE_USDT, leverage=leverage)
+    if not res:
+        logger.error('Open long failed for %s', symbol)
+        return
+    qty = res['qty']
+    entry = res['entry_price']
 
     async def monitor_and_arm_trailing():
         while True:
@@ -66,17 +82,64 @@ async def on_new_listing(symbol: str):
 
 
 async def main_loop():
-    watcher = AnnounceWatcher(
-        on_new_futures_listing=lambda s: asyncio.create_task(on_new_listing(s)),
-        poll_interval=config.POLL_INTERVAL,
-    )
-    await watcher.run()
+    raise SystemExit('Watcher mode has been removed. Use --symbol and --at-utc for manual execution.')
+
+
+def _parse_utc_datetime(s: str) -> datetime:
+    """Parse a UTC datetime string. Accepts formats like 'YYYY-MM-DD HH:MM' or ISO. Assumes UTC if tz missing."""
+    dt = None
+    try:
+        # Try common "YYYY-MM-DD HH:MM" without seconds
+        if 'T' not in s and len(s) >= 16 and s[10] == ' ':
+            dt = datetime.fromisoformat(s + "+00:00")
+        else:
+            # General ISO; replace trailing Z with +00:00
+            iso = s.replace('Z', '+00:00')
+            dt = datetime.fromisoformat(iso)
+    except Exception:
+        # Fallback: try plain date-time without tz
+        try:
+            dt = datetime.strptime(s, '%Y-%m-%d %H:%M')
+        except Exception:
+            raise ValueError(f"Unrecognized datetime format: {s}")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+async def manual_flow(symbol: str, at_utc: str | None):
+    # Normalize symbol (allow coin like BTC -> BTCUSDT)
+    sym = symbol.upper()
+    if not sym.endswith('USDT'):
+        sym = sym + 'USDT'
+
+    client = create_client(testnet=config.is_testnet)
+    ex = FuturesExecutor(client)
+    # Pre-set leverage ahead of time to avoid delay at the exact second (fixed 10x)
+    try:
+        chosen_lev = ex.set_leverage(sym, 10)
+    except Exception as e:
+        logger.error('Failed to set leverage for %s: %s', sym, e)
+        return
+
+    dt = _parse_utc_datetime(at_utc) if at_utc else None
+    now = datetime.now(tz=timezone.utc)
+    delay = (dt - now).total_seconds() if dt else 0
+    if delay > 0:
+        logger.info('Manual mode: waiting until %s UTC (%.1fs) for %s', dt.isoformat(), delay, sym)
+        await asyncio.sleep(delay)
+
+    await execute_immediate_trade(client, sym, chosen_lev)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['testnet', 'live'], default='testnet')
+    parser.add_argument('--symbol', help='Manual symbol to trade (e.g., BTCUSDT or BTC)')
+    parser.add_argument('--at-utc', help='UTC datetime to execute, e.g., "2025-10-11 08:00" or ISO 8601')
     args = parser.parse_args()
+    if args.symbol and not args.at_utc:
+        parser.error('--at-utc is required when --symbol is provided')
     config.MODE = args.mode
     logger.info(
         'Starting bot. mode=%s testnet=%s poll_interval=%ss log_level=%s',
@@ -86,6 +149,9 @@ if __name__ == '__main__':
         config.LOG_LEVEL,
     )
     try:
-        asyncio.run(main_loop())
+        if args.symbol:
+            asyncio.run(manual_flow(args.symbol, args.at_utc))
+        else:
+            raise SystemExit('Manual-only mode: provide --symbol and --at-utc')
     except KeyboardInterrupt:
         logger.info('Stopped by user')

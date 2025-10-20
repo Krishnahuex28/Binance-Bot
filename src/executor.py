@@ -9,17 +9,17 @@ class FuturesExecutor:
     def __init__(self, client: Client):
         self.client = client
 
-    def set_leverage_with_fallback(self, symbol: str, preferred=(50, 20, 10)) -> int:
-        for lev in preferred:
-            try:
-                self.client.futures_change_leverage(symbol=symbol, leverage=lev)
-                logger.info('Leverage set to %dx for %s', lev, symbol)
-                return lev
-            except BinanceAPIException as e:
-                logger.warning('Failed leverage %dx for %s: %s', lev, symbol, e)
-            except Exception as e:
-                logger.exception('Unexpected error setting leverage %dx for %s: %s', lev, symbol, e)
-        raise RuntimeError(f'Could not set leverage for {symbol}')
+    def set_leverage(self, symbol: str, leverage: int) -> int:
+        try:
+            self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            logger.info('Leverage set to %dx for %s', leverage, symbol)
+            return leverage
+        except BinanceAPIException as e:
+            logger.error('Failed to set leverage %dx for %s: %s', leverage, symbol, e)
+            raise
+        except Exception as e:
+            logger.exception('Unexpected error setting leverage %dx for %s: %s', leverage, symbol, e)
+            raise
 
     def open_futures_long(self, symbol: str, usdt_capital: float, leverage: int) -> dict | None:
         try:
@@ -46,27 +46,6 @@ class FuturesExecutor:
         except Exception as e:
             logger.exception('Unexpected open error: %s', e)
             return None
-
-    def place_take_profit_limits(self, symbol: str, qty: float, entry_price: float, tp_pcts=(0.03, 0.05)):
-        orders = []
-        splits = (0.5, 0.5)
-        for pct, part in zip(tp_pcts, splits):
-            price = round(entry_price * (1 + pct), 8)
-            q = round(qty * part, 6)
-            try:
-                r = self.client.futures_create_order(
-                    symbol=symbol,
-                    side='SELL',
-                    type='LIMIT',
-                    timeInForce='GTC',
-                    price=str(price),
-                    quantity=str(q),
-                    reduceOnly='true'
-                )
-                orders.append(r)
-            except Exception as e:
-                logger.exception('TP order failed: %s', e)
-        return orders
 
     def place_native_trailing_stop(self, symbol: str, qty: float, callback_rate: float = 1.0):
         try:
