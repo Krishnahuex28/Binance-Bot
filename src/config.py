@@ -10,8 +10,10 @@ class Config:
     API_KEY: str = os.getenv('BINANCE_API_KEY', '')
     API_SECRET: str = os.getenv('BINANCE_API_SECRET', '')
     MODE: str = os.getenv('MODE', 'testnet')
-    TRADE_USDT: float = float(os.getenv('TRADE_USDT', '50'))
+    TRADE_USDT: float = float(os.getenv('TRADE_USDT', '1'))
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
+    POLL_INTERVAL: int = int(os.getenv('POLL_INTERVAL', '20'))
+    ANNOUNCE_MAX_AGE_MINUTES: int = int(os.getenv('ANNOUNCE_MAX_AGE_MINUTES', '120'))
 
     @property
     def is_testnet(self) -> bool:

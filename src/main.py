@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import argparse
+import sys
 from binance.client import Client
 
 from config import config
@@ -9,7 +10,13 @@ from scanner import compute_score
 from executor import FuturesExecutor
 
 
-logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s %(levelname)s [%(name)s] %(message)s',
+    datefmt='%H:%M:%S',
+    stream=sys.stdout,
+    force=True,
+)
 logger = logging.getLogger('main')
 
 
@@ -59,7 +66,10 @@ async def on_new_listing(symbol: str):
 
 
 async def main_loop():
-    watcher = AnnounceWatcher(on_new_futures_listing=lambda s: asyncio.create_task(on_new_listing(s)))
+    watcher = AnnounceWatcher(
+        on_new_futures_listing=lambda s: asyncio.create_task(on_new_listing(s)),
+        poll_interval=config.POLL_INTERVAL,
+    )
     await watcher.run()
 
 
@@ -68,6 +78,13 @@ if __name__ == '__main__':
     parser.add_argument('--mode', choices=['testnet', 'live'], default='testnet')
     args = parser.parse_args()
     config.MODE = args.mode
+    logger.info(
+        'Starting bot. mode=%s testnet=%s poll_interval=%ss log_level=%s',
+        config.MODE,
+        'true' if config.is_testnet else 'false',
+        config.POLL_INTERVAL,
+        config.LOG_LEVEL,
+    )
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
